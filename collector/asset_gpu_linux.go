@@ -41,10 +41,10 @@ func NewAssetGPUCollector(logger *slog.Logger) (Collector, error) {
 	return &assetGPUCollector{
 		info: prometheus.NewDesc(
 			prometheus.BuildFQName(assetNamespace, "", "gpu_info"),
-			"A metric with a constant '1' value labeled by per-device GPU/NPU identity (vendor, name, serial, UUID, health, driver/firmware version).",
+			"A metric with a constant '1' value labeled by per-device GPU/NPU identity (vendor, name, serial, UUID, driver/firmware version, memory total).",
 			[]string{
 				assetUUIDLabel, "index", "vendor", "name", "serial", "gpu_uuid",
-				"driver_version", "firmware_version",
+				"driver_version", "firmware_version", "memory_total_mb",
 			},
 			nil,
 		),
@@ -72,6 +72,7 @@ func (c *assetGPUCollector) Update(ch chan<- prometheus.Metric) error {
 			assetLabel(dev.UUID),
 			assetLabel(dev.DriverVersion),
 			assetLabel(dev.FirmwareVersion),
+			strconv.FormatUint(dev.MemoryTotalMB, 10),
 		)
 	}
 	return nil
