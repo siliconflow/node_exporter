@@ -1,0 +1,28 @@
+ARG ARCH="amd64"
+ARG OS="linux"
+
+FROM golang:1.25-bookworm AS builder
+ARG ARCH
+ARG OS
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=${OS} GOARCH=${ARCH} go build -ldflags="-s -w" -o /bin/node_exporter .
+
+FROM ubuntu:22.04
+ARG ARCH
+ARG OS
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pciutils \
+    util-linux \
+    dmidecode \
+    iproute2 \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /bin/node_exporter /bin/node_exporter
+COPY entrypoint.sh /bin/entrypoint.sh
+
+EXPOSE      9100
+ENTRYPOINT  ["/bin/entrypoint.sh"]

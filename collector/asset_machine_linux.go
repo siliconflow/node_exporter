@@ -25,7 +25,7 @@ import (
 
 type assetMachineCollector struct {
 	info   *prometheus.Desc
-	uptime *prometheus.Desc
+	cache  assetCache[*cmdb.Machine]
 	logger *slog.Logger
 }
 
@@ -34,7 +34,7 @@ func init() {
 }
 
 // NewAssetMachineCollector returns a collector exposing machine hardware
-// identity (vendor/product/serial/board/kernel/...) under siliconflow_asset_*.
+// identity (vendor/product/serial/board/kernel/OS/...) under siliconflow_asset_*.
 func NewAssetMachineCollector(logger *slog.Logger) (Collector, error) {
 	return &assetMachineCollector{
 		info: prometheus.NewDesc(
@@ -48,11 +48,6 @@ func NewAssetMachineCollector(logger *slog.Logger) (Collector, error) {
 			},
 			nil,
 		),
-		uptime: prometheus.NewDesc(
-			prometheus.BuildFQName(assetNamespace, "", "machine_uptime_seconds"),
-			"System uptime in seconds.",
-			[]string{assetUUIDLabel}, nil,
-		),
 		logger: logger,
 	}, nil
 }
@@ -62,7 +57,9 @@ func (c *assetMachineCollector) Update(ch chan<- prometheus.Metric) error {
 	if err != nil {
 		return err
 	}
-	m, err := cmdb.CollectMachine()
+	m, err := c.cache.get(*assetCacheTTL, func() (*cmdb.Machine, error) {
+		return cmdb.CollectMachine()
+	})
 	if err != nil {
 		return err
 	}
@@ -85,6 +82,5 @@ func (c *assetMachineCollector) Update(ch chan<- prometheus.Metric) error {
 		assetLabel(m.BoardVersion),
 		assetLabel(m.BoardSerial),
 	)
-	ch <- prometheus.MustNewConstMetric(c.uptime, prometheus.GaugeValue, float64(m.Uptime), uuid)
 	return nil
 }

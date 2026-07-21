@@ -6,19 +6,16 @@ import (
 	"strings"
 
 	"github.com/prometheus/node_exporter/collector/asset/cmdb/model"
-	"github.com/shirou/gopsutil/v3/disk"
 )
 
 type lsblkDevice struct {
-	Name       string        `json:"name"`
-	Model      string        `json:"model"`
-	Vendor     string        `json:"vendor"`
-	Serial     string        `json:"serial"`
-	Size       flexUint      `json:"size"`
-	Type       string        `json:"type"`
-	Mountpoint string        `json:"mountpoint"`
-	FSType     string        `json:"fstype"`
-	Children   []lsblkDevice `json:"children,omitempty"`
+	Name     string   `json:"name"`
+	Model    string   `json:"model"`
+	Vendor   string   `json:"vendor"`
+	Serial   string   `json:"serial"`
+	Size     flexUint `json:"size"`
+	Type     string   `json:"type"`
+	Children []lsblkDevice `json:"children,omitempty"`
 }
 
 type flexUint uint64
@@ -44,7 +41,6 @@ func CollectDisk() (*model.Disk, error) {
 	d := &model.Disk{Devices: []model.DiskDevice{}}
 
 	collectLSBLK(d)
-	collectPartitionsUsage(d)
 
 	return d, nil
 }
@@ -55,7 +51,7 @@ func collectLSBLK(d *model.Disk) {
 	}
 
 	out, err := runCmd("lsblk", "-b", "-J",
-		"-o", "NAME,MODEL,VENDOR,SERIAL,SIZE,TYPE,MOUNTPOINT,FSTYPE")
+		"-o", "NAME,MODEL,VENDOR,SERIAL,SIZE,TYPE")
 	if err != nil {
 		return
 	}
@@ -78,35 +74,11 @@ func walkLSBLK(dev lsblkDevice, d *model.Disk) {
 		return
 	}
 	d.Devices = append(d.Devices, model.DiskDevice{
-		Name:       dev.Name,
-		Type:       dev.Type,
-		Model:      dev.Model,
-		Vendor:     dev.Vendor,
-		Serial:     dev.Serial,
-		SizeBytes:  uint64(dev.Size),
-		Mountpoint: dev.Mountpoint,
-		FsType:     dev.FSType,
+		Name:      dev.Name,
+		Type:      dev.Type,
+		Model:     dev.Model,
+		Vendor:    dev.Vendor,
+		Serial:    dev.Serial,
+		SizeBytes: uint64(dev.Size),
 	})
-}
-
-func collectPartitionsUsage(d *model.Disk) {
-	parts, err := disk.Partitions(true)
-	if err != nil {
-		return
-	}
-	usageMap := map[string]uint64{}
-	for _, p := range parts {
-		if u, err := disk.Usage(p.Mountpoint); err == nil {
-			usageMap[strings.TrimSpace(p.Device)] = u.Used
-		}
-	}
-	for i, dev := range d.Devices {
-		if dev.Mountpoint == "" {
-			continue
-		}
-		devPath := "/dev/" + dev.Name
-		if used, ok := usageMap[devPath]; ok {
-			d.Devices[i].UsedBytes = used
-		}
-	}
 }

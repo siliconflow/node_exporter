@@ -25,10 +25,9 @@ import (
 )
 
 type assetNetCollector struct {
-	info      *prometheus.Desc
-	mtuBytes  *prometheus.Desc
-	speedMbps *prometheus.Desc
-	logger    *slog.Logger
+	info   *prometheus.Desc
+	cache  assetCache[*cmdb.Net]
+	logger *slog.Logger
 }
 
 func init() {
@@ -36,29 +35,19 @@ func init() {
 }
 
 // NewAssetNetCollector returns a collector exposing physical NIC and bond
-// identity and link attributes under siliconflow_asset_*. Only physical NICs and
+// identity and topology under siliconflow_asset_*. Only physical NICs and
 // bond interfaces are reported (container/K8s virtual interfaces excluded by the
 // vendored cmdb collector).
 func NewAssetNetCollector(logger *slog.Logger) (Collector, error) {
 	return &assetNetCollector{
 		info: prometheus.NewDesc(
 			prometheus.BuildFQName(assetNamespace, "", "net_info"),
-			"A metric with a constant '1' value labeled by NIC identity (mac, up, physical, bond master, slaves, vendor, driver).",
+			"A metric with a constant '1' value labeled by NIC identity (mac, physical, bond master, slaves, vendor, driver).",
 			[]string{
-				assetUUIDLabel, "name", "mac", "up", "physical", "master",
+				assetUUIDLabel, "name", "mac", "physical", "master",
 				"slaves", "vendor", "driver",
 			},
 			nil,
-		),
-		mtuBytes: prometheus.NewDesc(
-			prometheus.BuildFQName(assetNamespace, "", "net_mtu_bytes"),
-			"NIC maximum transmission unit in bytes.",
-			[]string{assetUUIDLabel, "name"}, nil,
-		),
-		speedMbps: prometheus.NewDesc(
-			prometheus.BuildFQName(assetNamespace, "", "net_speed_mbps"),
-			"NIC link speed in megabits per second (0 if unavailable).",
-			[]string{assetUUIDLabel, "name"}, nil,
 		),
 		logger: logger,
 	}, nil
@@ -69,7 +58,9 @@ func (c *assetNetCollector) Update(ch chan<- prometheus.Metric) error {
 	if err != nil {
 		return err
 	}
-	n, err := cmdb.CollectNet()
+	n, err := c.cache.get(*assetCacheTTL, func() (*cmdb.Net, error) {
+		return cmdb.CollectNet()
+	})
 	if err != nil {
 		return err
 	}
@@ -79,15 +70,12 @@ func (c *assetNetCollector) Update(ch chan<- prometheus.Metric) error {
 			uuid,
 			assetLabel(dev.Name),
 			assetLabel(dev.Mac),
-			assetBool(dev.Up),
 			assetBool(dev.Physical),
 			assetLabel(dev.Master),
 			strings.Join(dev.Slaves, ","),
 			assetLabel(dev.Vendor),
 			assetLabel(dev.Driver),
 		)
-		ch <- prometheus.MustNewConstMetric(c.mtuBytes, prometheus.GaugeValue, float64(dev.MTU), uuid, dev.Name)
-		ch <- prometheus.MustNewConstMetric(c.speedMbps, prometheus.GaugeValue, float64(dev.SpeedMbps), uuid, dev.Name)
 	}
 	return nil
 }

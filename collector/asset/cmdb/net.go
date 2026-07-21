@@ -1,7 +1,6 @@
 package cmdb
 
 import (
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,16 +71,12 @@ func CollectNet() (*model.Net, error) {
 		dev := model.NetDevice{
 			Name:     iface.Name,
 			Mac:      strings.ToLower(strings.TrimSpace(iface.HardwareAddr)),
-			MTU:      iface.MTU,
-			Up:       isUp(iface.Flags),
 			Physical: physical,
 		}
-		dev.AddrsV4, dev.AddrsV6 = classifyAddrs(iface.Addrs)
 
 		if physical {
 			dev.Vendor = readSysNetVendor(iface.Name)
 			dev.Driver = readSysNetDriver(iface.Name)
-			dev.SpeedMbps = readSysNetSpeed(iface.Name)
 			// 标记从属的 bond(ens12f0 -> bond0);未加入 bond 的为空,单独显示。
 			dev.Master = bondOf[iface.Name]
 		} else if bond {
@@ -137,42 +132,6 @@ func isInfiniBandNIC(name string) bool {
 	return t == "32"
 }
 
-func isUp(flags []string) bool {
-	for _, f := range flags {
-		if strings.ToLower(f) == "up" {
-			return true
-		}
-	}
-	return false
-}
-
-// classifyAddrs 将地址分为 v4/v6,排除 link-local(169.254/16 与 fe80::/10)
-// 以及带 zone 的 IPv6 地址(%iface 后缀)。
-func classifyAddrs(addrs []gpnet.InterfaceAddr) (v4, v6 []string) {
-	for _, a := range addrs {
-		ipStr := a.Addr
-		if i := strings.Index(ipStr, "%"); i >= 0 {
-			ipStr = ipStr[:i]
-		}
-		if slash := strings.Index(ipStr, "/"); slash >= 0 {
-			ipStr = ipStr[:slash]
-		}
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
-			continue
-		}
-		if ip.IsLinkLocalUnicast() {
-			continue
-		}
-		if ip.To4() != nil {
-			v4 = append(v4, ip.String())
-		} else {
-			v6 = append(v6, ip.String())
-		}
-	}
-	return
-}
-
 func readSysNetVendor(name string) string {
 	return strings.TrimSpace(readSysFile(filepath.Join("/sys/class/net", name, "device", "vendor")))
 }
@@ -183,19 +142,4 @@ func readSysNetDriver(name string) string {
 		return ""
 	}
 	return filepath.Base(link)
-}
-
-func readSysNetSpeed(name string) int {
-	s := strings.TrimSpace(readSysFile(filepath.Join("/sys/class/net", name, "speed")))
-	if s == "" {
-		return 0
-	}
-	var n int
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return 0
-		}
-		n = n*10 + int(r-'0')
-	}
-	return n
 }

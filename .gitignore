@@ -42,3 +42,4 @@ collector/fixtures/udev/
 .DS_Store
 FIELDS.md
 node_exporter-asset
+examples/*

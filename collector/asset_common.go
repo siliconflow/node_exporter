@@ -28,19 +28,19 @@ import (
 const assetNamespace = "siliconflow_asset"
 
 // assetCacheTTL bounds how often each asset_* collector re-runs its cmdb
-// collection. Asset inventory is relatively static (machine/cpu/memory/disk/net
-// hardware doesn't change at runtime; gpu runtime metrics drift slowly), so
-// collectors cache the cmdb.Collect* result and serve it on every scrape until
-// the TTL elapses, then refresh. This keeps scrape latency low (no dmidecode /
-// nvidia-smi / lsblk shell-out per scrape) and matches a "one snapshot per day"
-// inventory cadence. Set to 0 to disable caching and collect on every scrape.
+// collection. Asset inventory is static (machine/cpu/memory/disk/net hardware
+// doesn't change at runtime; gpu identity is stable), so every asset collector
+// caches its cmdb.Collect* result and serves it on every scrape until the TTL
+// elapses, then refreshes. This keeps scrape latency low (no dmidecode /
+// nvidia-smi / lsblk / lspci shell-out per scrape) and matches a "one snapshot
+// per day" inventory cadence. Set to 0 to disable caching and collect on every
+// scrape.
 var assetCacheTTL = kingpin.Flag(
 	"collector.asset.cache-ttl",
-	"Time-to-live for cached asset collection results. Only applies to "+
-		"purely-static collectors (asset_cpu, asset_memory); collectors with "+
-		"realtime fields (asset_machine uptime, asset_disk used_bytes, "+
-		"asset_gpu utilization/temperature/power/memory, asset_net speed) "+
-		"always collect on every scrape. Set to 0 to disable caching entirely.",
+	"Time-to-live for cached asset collection results. All asset collectors "+
+		"(asset_cpu, asset_memory, asset_machine, asset_disk, asset_net, "+
+		"asset_gpu) cache their cmdb result and serve it on every scrape until "+
+		"the TTL elapses, then refresh. Set to 0 to disable caching entirely.",
 ).Default("24h").Duration()
 
 // assetUUIDFilePath is the persistent UUID written by --generate-uuid and read

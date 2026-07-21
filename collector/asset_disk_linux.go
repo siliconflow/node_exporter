@@ -26,7 +26,7 @@ import (
 type assetDiskCollector struct {
 	info   *prometheus.Desc
 	sizeGB *prometheus.Desc
-	usedGB *prometheus.Desc
+	cache  assetCache[*cmdb.Disk]
 	logger *slog.Logger
 }
 
@@ -35,26 +35,20 @@ func init() {
 }
 
 // NewAssetDiskCollector returns a collector exposing block device identity and
-// capacity/usage under siliconflow_asset_*.
+// capacity under siliconflow_asset_*.
 func NewAssetDiskCollector(logger *slog.Logger) (Collector, error) {
 	return &assetDiskCollector{
 		info: prometheus.NewDesc(
 			prometheus.BuildFQName(assetNamespace, "", "disk_info"),
-			"A metric with a constant '1' value labeled by block device identity (name, model, vendor, serial, mountpoint, fs type).",
+			"A metric with a constant '1' value labeled by block device identity (name, model, vendor, serial).",
 			[]string{
 				assetUUIDLabel, "name", "type", "model", "vendor", "serial",
-				"mountpoint", "fs_type",
 			},
 			nil,
 		),
 		sizeGB: prometheus.NewDesc(
 			prometheus.BuildFQName(assetNamespace, "", "disk_size_gb"),
 			"Block device capacity in gigabytes (1 GB = 10^9 bytes).",
-			[]string{assetUUIDLabel, "name"}, nil,
-		),
-		usedGB: prometheus.NewDesc(
-			prometheus.BuildFQName(assetNamespace, "", "disk_used_gb"),
-			"Used gigabytes on the block device's mounted filesystem (0 if unmounted). 1 GB = 10^9 bytes.",
 			[]string{assetUUIDLabel, "name"}, nil,
 		),
 		logger: logger,
@@ -66,7 +60,9 @@ func (c *assetDiskCollector) Update(ch chan<- prometheus.Metric) error {
 	if err != nil {
 		return err
 	}
-	d, err := cmdb.CollectDisk()
+	d, err := c.cache.get(*assetCacheTTL, func() (*cmdb.Disk, error) {
+		return cmdb.CollectDisk()
+	})
 	if err != nil {
 		return err
 	}
@@ -79,11 +75,8 @@ func (c *assetDiskCollector) Update(ch chan<- prometheus.Metric) error {
 			assetLabel(dev.Model),
 			assetLabel(dev.Vendor),
 			assetLabel(dev.Serial),
-			assetLabel(dev.Mountpoint),
-			assetLabel(dev.FsType),
 		)
 		ch <- prometheus.MustNewConstMetric(c.sizeGB, prometheus.GaugeValue, float64(dev.SizeBytes)/1e9, uuid, dev.Name)
-		ch <- prometheus.MustNewConstMetric(c.usedGB, prometheus.GaugeValue, float64(dev.UsedBytes)/1e9, uuid, dev.Name)
 	}
 	return nil
 }

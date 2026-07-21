@@ -48,7 +48,6 @@ func CollectMachine() (*model.Machine, error) {
 		m.OSVersion = info.PlatformVersion
 		m.Kernel = info.KernelVersion
 		m.KernelArch = info.KernelArch
-		m.Uptime = info.Uptime
 		virtSystem = info.VirtualizationSystem
 		virtRole = info.VirtualizationRole
 	}

@@ -1,15 +1,5 @@
 package model
 
-type SystemInfo struct {
-	Machine *Machine          `json:"machine,omitempty"`
-	CPU     *CPU              `json:"cpu,omitempty"`
-	Memory  *Memory           `json:"memory,omitempty"`
-	Disk    *Disk             `json:"disk,omitempty"`
-	GPU     *GPU              `json:"gpu,omitempty"`
-	Net     *Net              `json:"net,omitempty"`
-	Errors  map[string]string `json:"errors,omitempty"`
-}
-
 type Machine struct {
 	Vendor       string `json:"vendor,omitempty"`
 	Product      string `json:"product,omitempty"`
@@ -21,7 +11,6 @@ type Machine struct {
 	KernelArch   string `json:"kernel_arch,omitempty"`
 	OS           string `json:"os,omitempty"`
 	OSVersion    string `json:"os_version,omitempty"`
-	Uptime       uint64 `json:"uptime,omitempty"`
 	Type         string `json:"type,omitempty"`
 	K8sNode      bool   `json:"k8s_node,omitempty"`
 	BoardVendor  string `json:"board_vendor,omitempty"`
@@ -62,15 +51,12 @@ type Memory struct {
 }
 
 type DiskDevice struct {
-	Name       string `json:"name,omitempty"`
-	Type       string `json:"type,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Vendor     string `json:"vendor,omitempty"`
-	Serial     string `json:"serial,omitempty"`
-	SizeBytes  uint64 `json:"size_bytes,omitempty"`
-	Mountpoint string `json:"mountpoint,omitempty"`
-	FsType     string `json:"fs_type,omitempty"`
-	UsedBytes  uint64 `json:"used_bytes,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Type      string `json:"type,omitempty"`
+	Model     string `json:"model,omitempty"`
+	Vendor    string `json:"vendor,omitempty"`
+	Serial    string `json:"serial,omitempty"`
+	SizeBytes uint64 `json:"size_bytes,omitempty"`
 }
 
 type Disk struct {
@@ -89,7 +75,7 @@ type GPUDevice struct {
 	MemoryFreeMB    uint64  `json:"memory_free_mb,omitempty"`
 	Utilization     float64 `json:"utilization,omitempty"`
 	Temperature     float64 `json:"temperature,omitempty"`
-	PowerW          float64  `json:"power_w,omitempty"`
+	PowerW          float64 `json:"power_w,omitempty"`
 	DriverVersion   string  `json:"driver_version,omitempty"`
 	FirmwareVersion string  `json:"firmware_version,omitempty"`
 	// RuntimeMetrics reports whether memory/utilization/temperature/power
@@ -104,18 +90,13 @@ type GPU struct {
 }
 
 type NetDevice struct {
-	Name      string   `json:"name,omitempty"`
-	Mac       string   `json:"mac,omitempty"`
-	AddrsV4   []string `json:"addrs_v4,omitempty"`
-	AddrsV6   []string `json:"addrs_v6,omitempty"`
-	MTU       int      `json:"mtu,omitempty"`
-	Up        bool     `json:"up"`
-	Physical  bool     `json:"physical"`
-	Master    string   `json:"master,omitempty"`
-	Slaves    []string `json:"slaves,omitempty"`
-	Vendor    string   `json:"vendor,omitempty"`
-	Driver    string   `json:"driver,omitempty"`
-	SpeedMbps int      `json:"speed_mbps,omitempty"`
+	Name     string   `json:"name,omitempty"`
+	Mac      string   `json:"mac,omitempty"`
+	Physical bool     `json:"physical"`
+	Master   string   `json:"master,omitempty"`
+	Slaves   []string `json:"slaves,omitempty"`
+	Vendor   string   `json:"vendor,omitempty"`
+	Driver   string   `json:"driver,omitempty"`
 }
 
 type Net struct {

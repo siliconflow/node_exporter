@@ -26,6 +26,7 @@ import (
 
 type assetGPUCollector struct {
 	info   *prometheus.Desc
+	cache  assetCache[*cmdb.GPU]
 	logger *slog.Logger
 }
 
@@ -34,9 +35,9 @@ func init() {
 }
 
 // NewAssetGPUCollector returns a collector exposing GPU/NPU identity under
-// siliconflow_asset_*. Runtime metrics (memory/utilization/temperature/power)
-// are exposed by the separate "gpu" collector under node_gpu_*. NVIDIA, Huawei
-// NPU and a catch-all lspci fallback are handled by the vendored cmdb collector.
+// siliconflow_asset_*. NVIDIA, Huawei NPU and a catch-all lspci fallback are
+// handled by the vendored cmdb collector. The cmdb call is wrapped in assetCache
+// so the per-scrape nvidia-smi/npu-smi/lspci shell-outs only run once per TTL.
 func NewAssetGPUCollector(logger *slog.Logger) (Collector, error) {
 	return &assetGPUCollector{
 		info: prometheus.NewDesc(
@@ -57,7 +58,9 @@ func (c *assetGPUCollector) Update(ch chan<- prometheus.Metric) error {
 	if err != nil {
 		return err
 	}
-	g, err := cmdb.CollectGPU()
+	g, err := c.cache.get(*assetCacheTTL, func() (*cmdb.GPU, error) {
+		return cmdb.CollectGPU()
+	})
 	if err != nil {
 		return err
 	}
