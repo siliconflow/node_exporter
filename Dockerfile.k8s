@@ -5,6 +5,7 @@ FROM golang:1.25-bookworm AS builder
 ARG ARCH
 ARG OS
 WORKDIR /src
+ENV GOPROXY=https://goproxy.cn,direct
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
@@ -23,6 +24,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /bin/node_exporter /bin/node_exporter
 COPY entrypoint.sh /bin/entrypoint.sh
+
+RUN printf '#!/bin/sh\nexec env LD_LIBRARY_PATH=/host/gpu-lib:/host/Ascend/driver/lib64 /host/usr/bin/nvidia-smi "$$@"\n' > /usr/local/bin/nvidia-smi \
+  && chmod +x /usr/local/bin/nvidia-smi \
+  && printf '#!/bin/sh\nexec env LD_LIBRARY_PATH=/host/gpu-lib:/host/Ascend/driver/lib64 /host/usr/local/sbin/npu-smi "$$@"\n' > /usr/local/bin/npu-smi \
+  && chmod +x /usr/local/bin/npu-smi
 
 EXPOSE      9100
 ENTRYPOINT  ["/bin/entrypoint.sh"]
