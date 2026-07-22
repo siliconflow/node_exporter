@@ -121,6 +121,138 @@ func TestParseNVIDIA(t *testing.T) {
 	}
 }
 
+// Real-world excerpt of `mthreads-gmi --query --json` (2 of 8 MTT S5000 cards).
+// Note the Power Readings key "Power Draw " carries a TRAILING SPACE — the
+// parser must not rely on exact key matching. Memory values carry a "MiB"
+// suffix, utilization a "%", temperature a "C", power a "W". The driver
+// version lives at the top level, not per-GPU.
+const mthreadsGMISample = `{
+    "Timestamp": "Wed Jul 22 16:07:29 2026",
+    "Driver Version": "3.3.5-server",
+    "Attached GPUs": "8",
+    "GPU": [
+        {
+            "Index": "0",
+            "Product Name": "MTT S5000",
+            "Product Brand": "MTT",
+            "GPU UUID": "399282a8-ba01-1475-893c-2eeca9e302f5",
+            "Serial Number": "MY10YL225BF06077",
+            "MTBios Version": "4.3.41",
+            "PCI": {
+                "Bus": "0x2A",
+                "Bus ID": "00000000:2a:00.0",
+                "Vendor ID": "0x1ED5",
+                "Device ID": "0x0400"
+            },
+            "FB Memory Usage": {
+                "Total": "81920MiB",
+                "Used": "0MiB",
+                "Free": "81920MiB"
+            },
+            "Utilization": {
+                "Gpu": "0%",
+                "Memory": "0%"
+            },
+            "Temperature": {
+                "GPU Current Temp": "27C"
+            },
+            "Power Readings": {
+                "Power Draw ": "96.66W",
+                "Current Power Limit": "950.00W"
+            }
+        },
+        {
+            "Index": "1",
+            "Product Name": "MTT S5000",
+            "GPU UUID": "5ebdeb63-ba7a-5904-4f16-495b3e1de6c8",
+            "Serial Number": "MY10YL225BF06005",
+            "MTBios Version": "4.3.41",
+            "FB Memory Usage": {
+                "Total": "81920MiB",
+                "Used": "0MiB",
+                "Free": "81920MiB"
+            },
+            "Utilization": {
+                "Gpu": "0%"
+            },
+            "Temperature": {
+                "GPU Current Temp": "26C"
+            },
+            "Power Readings": {
+                "Power Draw ": "97.09W"
+            }
+        }
+    ]
+}`
+
+func TestParseMThreads(t *testing.T) {
+	devs := parseMThreads(mthreadsGMISample)
+	if len(devs) != 2 {
+		t.Fatalf("expected 2 devices, got %d: %+v", len(devs), devs)
+	}
+
+	d0 := devs[0]
+	if d0.Index != 0 || d0.Vendor != "mthreads" || d0.Name != "MTT S5000" {
+		t.Errorf("d0 meta mismatch: %+v", d0)
+	}
+	if d0.UUID != "399282a8-ba01-1475-893c-2eeca9e302f5" {
+		t.Errorf("d0 uuid = %q", d0.UUID)
+	}
+	if d0.Serial != "MY10YL225BF06077" {
+		t.Errorf("d0 serial = %q", d0.Serial)
+	}
+	// Driver version comes from the top level, not per-GPU.
+	if d0.DriverVersion != "3.3.5-server" {
+		t.Errorf("d0 driver = %q, want 3.3.5-server", d0.DriverVersion)
+	}
+	// Firmware = MTBios Version.
+	if d0.FirmwareVersion != "4.3.41" {
+		t.Errorf("d0 firmware = %q, want 4.3.41", d0.FirmwareVersion)
+	}
+	// Memory carries "MiB" suffix → stripped to uint64 MB.
+	if d0.MemoryTotalMB != 81920 || d0.MemoryUsedMB != 0 || d0.MemoryFreeMB != 81920 {
+		t.Errorf("d0 mem total/used/free = %d/%d/%d, want 81920/0/81920",
+			d0.MemoryTotalMB, d0.MemoryUsedMB, d0.MemoryFreeMB)
+	}
+	// Utilization "0%" → 0.
+	if d0.Utilization != 0 {
+		t.Errorf("d0 util = %v, want 0", d0.Utilization)
+	}
+	// Temperature "27C" → 27.
+	if d0.Temperature != 27 {
+		t.Errorf("d0 temp = %v, want 27", d0.Temperature)
+	}
+	// Power "96.66W" → 96.66, resolved via trimmed-equals despite the
+	// trailing space in the "Power Draw " JSON key.
+	if d0.PowerW != 96.66 {
+		t.Errorf("d0 power = %v, want 96.66", d0.PowerW)
+	}
+	if d0.Health != "OK" {
+		t.Errorf("d0 health = %q, want OK", d0.Health)
+	}
+	if !d0.RuntimeMetrics {
+		t.Error("d0 RuntimeMetrics should be true (mthreads-gmi provided runtime values)")
+	}
+
+	d1 := devs[1]
+	if d1.Index != 1 || d1.Serial != "MY10YL225BF06005" {
+		t.Errorf("d1 mismatch: %+v", d1)
+	}
+	if d1.Temperature != 26 || d1.PowerW != 97.09 {
+		t.Errorf("d1 temp/power = %v/%v, want 26/97.09", d1.Temperature, d1.PowerW)
+	}
+}
+
+func TestParseMThreadsEmpty(t *testing.T) {
+	if devs := parseMThreads(""); len(devs) != 0 {
+		t.Fatalf("expected 0 devices for empty input, got %d", len(devs))
+	}
+	// Malformed JSON → nil (decode error), not a panic.
+	if devs := parseMThreads("{not json"); len(devs) != 0 {
+		t.Fatalf("expected 0 devices for malformed input, got %d", len(devs))
+	}
+}
+
 // TestGPUFieldParity verifies both vendors populate the same set of struct fields.
 func TestGPUFieldParity(t *testing.T) {
 	nv := parseNVIDIA(nvidiaSMISample)
@@ -544,6 +676,34 @@ const lspci3DControllerSample = `0000:43:00.0 3D controller [0302]: NVIDIA Corpo
 0000:43:00.1 Audio device [0403]: NVIDIA Corporation GA100 High Definition Audio [10de:20b5] (rev a1)
 `
 
+// Production lspci from an 8× RTX 4090 host. Every GPU node's BMC exposes an
+// ASPEED VGA controller alongside the real NVIDIA cards; ASPEED's PCI vendor
+// ID (1a03) isn't in pciVendorMap, so probeGpuVendor must skip it and route to
+// nvidia. Verifies the "first RECOGNIZED vendor" rule against real fleet data.
+const lspciAspeedAndNvidiaSample = `0000:03:00.0 VGA compatible controller [0300]: ASPEED Technology, Inc. ASPEED Graphics Family [1a03:2000] (rev 52)
+0000:16:00.0 VGA compatible controller [0300]: NVIDIA Corporation Device 2684 [10de:2684] (rev a1)
+0000:36:00.0 VGA compatible controller [0300]: NVIDIA Corporation Device 2684 [10de:2684] (rev a1)
+0000:46:00.0 VGA compatible controller [0300]: NVIDIA Corporation Device 2684 [10de:2684] (rev a1)
+0000:56:00.0 VGA compatible controller [0300]: NVIDIA Corporation Device 2684 [10de:2684] (rev a1)
+0000:98:00.0 VGA compatible controller [0300]: NVIDIA Corporation Device 2684 [10de:2684] (rev a1)
+0000:b8:00.0 VGA compatible controller [0300]: NVIDIA Corporation Device 2684 [10de:2684] (rev a1)
+0000:c8:00.0 VGA compatible controller [0300]: NVIDIA Corporation Device 2684 [10de:2684] (rev a1)
+0000:d8:00.0 VGA compatible controller [0300]: NVIDIA Corporation Device 2684 [10de:2684] (rev a1)
+`
+
+// Production lspci (no -nn) from an 8× compute-card host where the GPUs show up
+// as "3D controller" (compute-only, no VGA). Used to verify the 0x0302 subclass
+// still routes to nvidia.
+const lspciNvidia3DControllersSample = `19:00.0 3D controller: NVIDIA Corporation Device 2335 (rev a1)
+2a:00.0 3D controller: NVIDIA Corporation Device 2335 (rev a1)
+3b:00.0 3D controller: NVIDIA Corporation Device 2335 (rev a1)
+5d:00.0 3D controller: NVIDIA Corporation Device 2335 (rev a1)
+9b:00.0 3D controller: NVIDIA Corporation Device 2335 (rev a1)
+ab:00.0 3D controller: NVIDIA Corporation Device 2335 (rev a1)
+bb:00.0 3D controller: NVIDIA Corporation Device 2335 (rev a1)
+db:00.0 3D controller: NVIDIA Corporation Device 2335 (rev a1)
+`
+
 // A typical mixed-vendor host: an Intel integrated GPU alongside discrete
 // cards from AMD and NVIDIA (here an NVIDIA audio subfunction with no display
 // sibling on this host, e.g. a USB-C display output mux). All display-class
@@ -553,6 +713,14 @@ const lspciMixedVendorSample = `00:02.0 VGA compatible controller [0300]: Intel 
 01:00.0 VGA compatible controller [0300]: Advanced Micro Devices, Inc. [AMD/ATI] Navi 21 [Radeon RX 6800/6800 XT / 6900 XT] [1002:73bf] (rev c1)
 01:00.1 Audio device [0403]: Advanced Micro Devices, Inc. [AMD/ATI] Navi 21 HDMI Audio [1002:ab28] (rev c1)
 02:00.0 Audio device [0403]: NVIDIA Corporation GP107GL High Definition Audio Controller [10de:0fb5] (rev a1)
+`
+
+// Moore Threads MTT S5000 shows up as "3D controller" (PCI subclass 0x0302,
+// compute-only — same subclass as NVIDIA A100). With -nn the numeric PCI
+// vendor:device ID [1ed5:0400] routes it to the "mthreads" collector.
+const lspciMthreads3DControllerSample = `0000:2a:00.0 3D controller [0302]: Moore Threads Technology Co.,Ltd Device 0400 [1ed5:0400] (rev 01)
+0000:3a:00.0 3D controller [0302]: Moore Threads Technology Co.,Ltd Device 0400 [1ed5:0400] (rev 01)
+0000:5c:00.0 3D controller [0302]: Moore Threads Technology Co.,Ltd Device 0400 [1ed5:0400] (rev 01)
 `
 
 // An accelerator from a vendor the collector's pciVendorMap doesn't know —
@@ -687,6 +855,30 @@ func TestParseLspciGPU3DController(t *testing.T) {
 	}
 }
 
+// Huawei Ascend 910B2C exposes "Processing accelerators" (PCI class 0x12), NOT
+// a display controller — parseLspciGPU must still pick it up, otherwise every
+// Huawei host would be misrouted to "unknown vendor" and dropped.
+func TestParseLspciGPUHuaweiAccelerator(t *testing.T) {
+	const in = `0000:18:00.0 Processing accelerators [1200]: Huawei Technologies Co., Ltd. Device d802 [19e5:d802] (rev 20)
+0000:18:00.1 Processing accelerators [1200]: Huawei Technologies Co., Ltd. Device d802 [19e5:d802] (rev 20)
+`
+	devs := parseLspciGPU(in)
+	if len(devs) != 2 {
+		t.Fatalf("expected 2 NPUs (Processing accelerators class), got %d: %+v",
+			len(devs), devs)
+	}
+	d := devs[0]
+	if d.Vendor != "huawei" {
+		t.Errorf("vendor = %q, want huawei (PCI vendor 19e5)", d.Vendor)
+	}
+	if d.UUID != "0000:18:00.0" {
+		t.Errorf("uuid = %q, want 0000:18:00.0", d.UUID)
+	}
+	if d.Serial != "19e5:d802" {
+		t.Errorf("serial = %q, want 19e5:d802", d.Serial)
+	}
+}
+
 // Any display-class device of ANY vendor is captured — not just NVIDIA. This
 // is the case that distinguishes the catch-all lspci fallback from the older
 // NVIDIA-only parser: an Intel iGPU and a discrete AMD Radeon show up
@@ -725,6 +917,34 @@ func TestParseLspciGPUMixedVendor(t *testing.T) {
 	}
 	if d1.Serial != "1002:73bf" {
 		t.Errorf("d1 serial = %q, want 1002:73bf", d1.Serial)
+	}
+}
+
+// Moore Threads 3D controllers are compute-only (no VGA), same subclass as
+// the NVIDIA A100. Verifies the 0x0302 subclass routes to mthreads via the
+// numeric PCI vendor ID 1ed5.
+func TestParseLspciGPUMthreads3DController(t *testing.T) {
+	devs := parseLspciGPU(lspciMthreads3DControllerSample)
+	if len(devs) != 3 {
+		t.Fatalf("expected 3 GPUs, got %d: %+v", len(devs), devs)
+	}
+	for i, d := range devs {
+		if d.Vendor != "mthreads" {
+			t.Errorf("dev %d vendor = %q, want mthreads (PCI vendor 1ed5)", i, d.Vendor)
+		}
+		if d.Serial != "1ed5:0400" {
+			t.Errorf("dev %d serial = %q, want 1ed5:0400", i, d.Serial)
+		}
+		if d.Index != i {
+			t.Errorf("dev %d index = %d, want %d", i, d.Index, i)
+		}
+	}
+	d0 := devs[0]
+	if d0.UUID != "0000:2a:00.0" {
+		t.Errorf("d0 uuid = %q, want 0000:2a:00.0", d0.UUID)
+	}
+	if d0.Name != "Moore Threads Technology Co.,Ltd Device 0400" {
+		t.Errorf("d0 name = %q", d0.Name)
 	}
 }
 
@@ -780,9 +1000,11 @@ func TestIdentifyLspciVendor(t *testing.T) {
 		{"1002:73bf", "Advanced Micro Devices, Inc. [AMD/ATI] Navi 21", "amd"},
 		{"1002:AB28", "AMD audio (uppercase hex ID, case-insensitive)", "amd"},
 		{"19e5:abcd", "Huawei NPU device", "huawei"},
+		{"1ed5:0400", "Moore Threads Technology Co.,Ltd Device 0400", "mthreads"},
 		// Plain lspci (no -nn) — fall back to textual description.
 		{"", "NVIDIA Corporation Device 2b85", "nvidia"},
 		{"", "Advanced Micro Devices, Inc. [AMD/ATI]", "amd"},
+		{"", "Moore Threads Technology Co.,Ltd Device 0400", "mthreads"},
 		// Unknown PCI vendor: surface the hex ID so it stays identifiable.
 		{"1cee:0100", "Iluvatar CoreX Triton X100", "1cee"},
 		// Empty PCI ID + unrecognized text: last-resort "unknown".
@@ -845,59 +1067,47 @@ func TestParseLspciDeviceDesc(t *testing.T) {
 	}
 }
 
-// The lspci catch-all must skip cards of vendors already covered by their
-// specialized tool (otherwise every working NVIDIA driver would be double
-// counted once by nvidia-smi and again by lspci). It must still add cards of
-// any OTHER vendor on the host. Indices continue past whatever the
-// specialized tools already populated so they stay globally unique.
-func TestAppendLspciGPUDedup(t *testing.T) {
-	// Simulate nvidia-smi having already contributed 2 NVIDIA devices.
-	g := &model.GPU{Devices: []model.GPUDevice{
-		{Index: 0, Vendor: "nvidia", Name: "NVIDIA GeForce RTX 4090", UUID: "GPU-aaa"},
-		{Index: 1, Vendor: "nvidia", Name: "NVIDIA GeForce RTX 4090", UUID: "GPU-bbb"},
-	}}
+// ---------------------------------- collectGPUCore routing
 
-	// Same host's lspci: 2 NVIDIA VGA controllers (already covered by
-	// nvidia-smi — must be skipped), 1 Intel iGPU (must be added).
-	const lspciOut = `00:02.0 VGA compatible controller [0300]: Intel Corporation CoffeeLake-S GT2 [UHD Graphics 630] [8086:3e98] (rev 02)
-01:00.0 VGA compatible controller [0300]: NVIDIA Corporation AD102 [GeForce RTX 4090] [10de:2684] (rev a1)
-01:00.1 Audio device [0403]: NVIDIA Corporation AD102 High Definition Audio [10de:22ba] (rev a1)
-02:00.0 VGA compatible controller [0300]: NVIDIA Corporation AD102 [GeForce RTX 4090] [10de:2684] (rev a1)
-`
-	appendLspciGPU(g, lspciOut, /*nvidiaOK=*/ true, /*huaweiOK=*/ false)
-
-	if len(g.Devices) != 3 {
-		t.Fatalf("expected 3 devices (2 nvidia-smi + 1 Intel), got %d: %+v",
-			len(g.Devices), g.Devices)
-	}
-
-	// First two devices (from nvidia-smi) untouched.
-	if g.Devices[0].Vendor != "nvidia" || g.Devices[0].UUID != "GPU-aaa" {
-		t.Errorf("d0 should be the nvidia-smi entry, got %+v", g.Devices[0])
-	}
-	if g.Devices[1].Vendor != "nvidia" || g.Devices[1].UUID != "GPU-bbb" {
-		t.Errorf("d1 should be the nvidia-smi entry, got %+v", g.Devices[1])
-	}
-
-	// Intel added via lspci, with index continuing past the existing entries.
-	d2 := g.Devices[2]
-	if d2.Index != 2 {
-		t.Errorf("d2 index = %d, want 2 (continues past nvidia-smi's 0/1)", d2.Index)
-	}
-	if d2.Vendor != "intel" {
-		t.Errorf("d2 vendor = %q, want intel", d2.Vendor)
-	}
-	if d2.UUID != "0000:00:02.0" {
-		t.Errorf("d2 uuid = %q, want 0000:00:02.0", d2.UUID)
+// smiOK builds a fake smi collector that contributes the given prebuilt
+// devices and reports "ok" (≥1 card). Simulates nvidia-smi / npu-smi success
+// without shelling out.
+func smiOK(devs ...model.GPUDevice) func(*model.GPU) bool {
+	return func(g *model.GPU) bool {
+		g.Devices = append(g.Devices, devs...)
+		return len(devs) > 0
 	}
 }
 
-// When the specialized tool returned nothing for NVIDIA (i.e. cards are
-// passthrough'd to guests) lspci must add ALL the NVIDIA cards it sees —
-// including the audio-sibling dedup — AND any other-vendor cards.
-func TestAppendLspciGPUNvidiaPassthrough(t *testing.T) {
-	g := &model.GPU{Devices: []model.GPUDevice{}}
-	appendLspciGPU(g, lspciPlainSample, /*nvidiaOK=*/ false, /*huaweiOK=*/ false)
+// smiEmpty simulates an smi tool that found no cards (passthrough / broken
+// driver) — returns false so collectGPUCore falls back to lspci enumeration.
+func smiEmpty(_ *model.GPU) bool { return false }
+
+// NVIDIA host: lspci sees NVIDIA, smi succeeds → use smi output (richer: runtime
+// + identity). The lspci enumeration must NOT also be appended.
+func TestCollectGPUCore_NvidiaSmiSucceeds(t *testing.T) {
+	collectors := map[string]func(*model.GPU) bool{
+		"nvidia": smiOK(model.GPUDevice{
+			Index: 0, Vendor: "nvidia", Name: "A100", UUID: "GPU-aaa",
+			DriverVersion: "535.0", MemoryTotalMB: 40960, RuntimeMetrics: true,
+		}),
+	}
+	g := collectGPUCore(lspciDnnSample, collectors)
+
+	if len(g.Devices) != 1 {
+		t.Fatalf("expected 1 device (from smi), got %d: %+v", len(g.Devices), g.Devices)
+	}
+	d := g.Devices[0]
+	if d.UUID != "GPU-aaa" || !d.RuntimeMetrics || d.DriverVersion != "535.0" {
+		t.Errorf("expected smi output (runtime+identity), got %+v", d)
+	}
+}
+
+// NVIDIA host with all cards passed through: smi empty → fall back to lspci
+// enumeration of NVIDIA cards (audio subfunctions skipped, indices contiguous).
+func TestCollectGPUCore_NvidiaPassthroughFallback(t *testing.T) {
+	collectors := map[string]func(*model.GPU) bool{"nvidia": smiEmpty}
+	g := collectGPUCore(lspciPlainSample, collectors)
 
 	if len(g.Devices) != 8 {
 		t.Fatalf("expected 8 NVIDIA GPUs from lspci (audio skipped), got %d: %+v",
@@ -910,30 +1120,210 @@ func TestAppendLspciGPUNvidiaPassthrough(t *testing.T) {
 		if d.Vendor != "nvidia" {
 			t.Errorf("dev %d vendor = %q, want nvidia", i, d.Vendor)
 		}
+		if d.RuntimeMetrics {
+			t.Errorf("dev %d RuntimeMetrics must be false (lspci fallback)", i)
+		}
 	}
 }
 
-// Huawei NPU passthrough mirrors the NVIDIA case: when npu-smi finds nothing
-// on the host (cards reserved for guests), lspci enumerates the same cards.
-func TestAppendLspciGPUHuaweiPassthrough(t *testing.T) {
-	g := &model.GPU{Devices: []model.GPUDevice{}}
-	const lspciOut = `0000:c1:00.0 Display controller [0380]: Huawei Technologies Co., Ltd. Ascend NPU [19e5:abcd] (rev 01)
-0000:c1:00.1 Processing accelerators [1200]: Huawei Technologies Co., Ltd. Ascend NPU [19e5:abce] (rev 01)
+// Huawei host with all cards passed through: npu-smi empty → lspci fallback.
+// Huawei Ascend 910B2C exposes the "Processing accelerators" PCI class (0x12),
+// NOT a display class — this test pins that isGpuOrAccelerator recognizes it.
+func TestCollectGPUCore_HuaweiPassthroughFallback(t *testing.T) {
+	// Production-shaped lspci (-Dnn) excerpt from a 910B2C host: 4 of the 16
+	// NPUs, each "Processing accelerators" [1200], vendor 19e5:d802.
+	const lspciOut = `0000:18:00.0 Processing accelerators [1200]: Huawei Technologies Co., Ltd. Device d802 [19e5:d802] (rev 20)
+0000:19:00.0 Processing accelerators [1200]: Huawei Technologies Co., Ltd. Device d802 [19e5:d802] (rev 20)
+0000:38:00.0 Processing accelerators [1200]: Huawei Technologies Co., Ltd. Device d802 [19e5:d802] (rev 20)
+0000:39:00.0 Processing accelerators [1200]: Huawei Technologies Co., Ltd. Device d802 [19e5:d802] (rev 20)
 `
-	appendLspciGPU(g, lspciOut, /*nvidiaOK=*/ false, /*huaweiOK=*/ false)
+	collectors := map[string]func(*model.GPU) bool{"huawei": smiEmpty}
+	g := collectGPUCore(lspciOut, collectors)
 
-	if len(g.Devices) != 1 {
-		t.Fatalf("expected 1 NPU (display controller only; Processing accelerators class is not display), got %d: %+v",
+	if len(g.Devices) != 4 {
+		t.Fatalf("expected 4 NPUs from lspci fallback, got %d: %+v",
 			len(g.Devices), g.Devices)
 	}
+	for i, d := range g.Devices {
+		if d.Vendor != "huawei" {
+			t.Errorf("dev %d vendor = %q, want huawei", i, d.Vendor)
+		}
+		if d.Serial != "19e5:d802" {
+			t.Errorf("dev %d serial = %q, want 19e5:d802", i, d.Serial)
+		}
+		if d.Index != i {
+			t.Errorf("dev %d index = %d, want %d (renumbered contiguous)", i, d.Index, i)
+		}
+		if d.RuntimeMetrics {
+			t.Errorf("dev %d RuntimeMetrics must be false (lspci fallback)", i)
+		}
+	}
+}
+
+// Unknown vendor (no registered collector) → dropped, empty GPU set. This is
+// the "no integrated GPUs" policy: an Intel iGPU must not be recorded.
+func TestCollectGPUCore_UnknownVendorDropped(t *testing.T) {
+	// lspciMixedVendorSample has Intel + AMD display devices, neither registered.
+	g := collectGPUCore(lspciMixedVendorSample, gpuVendorCollectors)
+	if len(g.Devices) != 0 {
+		t.Fatalf("expected 0 devices for unknown vendors, got %d: %+v",
+			len(g.Devices), g.Devices)
+	}
+}
+
+// No display-class device at all (empty lspci) → empty GPU set.
+func TestCollectGPUCore_NoDisplayDevice(t *testing.T) {
+	g := collectGPUCore("", gpuVendorCollectors)
+	if g == nil || len(g.Devices) != 0 {
+		t.Fatalf("expected empty GPU set, got %+v", g)
+	}
+}
+
+// lspci sees a non-registered vendor first, then a registered one: routing
+// uses the first RECOGNIZED vendor, not the literal first device.
+func TestCollectGPUCore_RecognizedVendorChosen(t *testing.T) {
+	// Intel iGPU first, then an NVIDIA card. probeGpuVendor must skip Intel
+	// (no collector) and pick "nvidia".
+	collectors := map[string]func(*model.GPU) bool{
+		"nvidia": smiOK(model.GPUDevice{Index: 0, Vendor: "nvidia", Name: "from-smi", UUID: "GPU-x"}),
+	}
+	const lspciOut = `00:02.0 VGA compatible controller [0300]: Intel Corporation iGPU [8086:3e98] (rev 02)
+01:00.0 VGA compatible controller [0300]: NVIDIA Corporation A100 [10de:20b5] (rev a1)
+`
+	g := collectGPUCore(lspciOut, collectors)
+	if len(g.Devices) != 1 || g.Devices[0].Name != "from-smi" {
+		t.Fatalf("expected smi result despite Intel appearing first, got %+v", g.Devices)
+	}
+}
+
+// Production scenario: an 8× RTX 4090 host whose BMC also exposes an ASPEED
+// VGA controller. ASPEED (1a03) isn't a registered vendor, so probeGpuVendor
+// skips it and routes to nvidia. Uses the real lspci shape from the fleet.
+func TestCollectGPUCore_AspeedBmcSkippedRoutesToNvidia(t *testing.T) {
+	called := false
+	collectors := map[string]func(*model.GPU) bool{
+		"nvidia": func(g *model.GPU) bool {
+			called = true
+			g.Devices = append(g.Devices, model.GPUDevice{
+				Index: 0, Vendor: "nvidia", Name: "RTX 4090", UUID: "GPU-smi",
+				RuntimeMetrics: true,
+			})
+			return true
+		},
+	}
+	g := collectGPUCore(lspciAspeedAndNvidiaSample, collectors)
+
+	if !called {
+		t.Fatal("nvidia smi collector was not invoked (ASPEED should not block routing)")
+	}
+	if len(g.Devices) != 1 || g.Devices[0].UUID != "GPU-smi" {
+		t.Fatalf("expected smi output, got %+v", g.Devices)
+	}
+}
+
+// Production scenario: 8× compute-only NVIDIA cards show up as "3D controller"
+// (PCI subclass 0x0302), not VGA. Verifies this subclass routes to nvidia.
+func TestCollectGPUCore_Nvidia3DControllersRouteToNvidia(t *testing.T) {
+	collectors := map[string]func(*model.GPU) bool{
+		"nvidia": smiOK(model.GPUDevice{Index: 0, Vendor: "nvidia", Name: "from-smi", UUID: "GPU-x"}),
+	}
+	g := collectGPUCore(lspciNvidia3DControllersSample, collectors)
+	if len(g.Devices) != 1 || g.Devices[0].Name != "from-smi" {
+		t.Fatalf("expected nvidia smi output for 3D-controller host, got %+v", g.Devices)
+	}
+}
+
+// Moore Threads host: lspci sees mthreads (1ed5), smi succeeds → use smi
+// output (richer: runtime + identity). The lspci enumeration must NOT also be
+// appended.
+func TestCollectGPUCore_MthreadsSmiSucceeds(t *testing.T) {
+	collectors := map[string]func(*model.GPU) bool{
+		"mthreads": smiOK(model.GPUDevice{
+			Index: 0, Vendor: "mthreads", Name: "MTT S5000", UUID: "399282a8",
+			DriverVersion: "3.3.5-server", MemoryTotalMB: 81920, RuntimeMetrics: true,
+		}),
+	}
+	g := collectGPUCore(lspciMthreads3DControllerSample, collectors)
+	if len(g.Devices) != 1 {
+		t.Fatalf("expected 1 device (from smi), got %d: %+v", len(g.Devices), g.Devices)
+	}
 	d := g.Devices[0]
-	if d.Vendor != "huawei" {
-		t.Errorf("vendor = %q, want huawei", d.Vendor)
+	if d.UUID != "399282a8" || !d.RuntimeMetrics || d.DriverVersion != "3.3.5-server" {
+		t.Errorf("expected smi output (runtime+identity), got %+v", d)
 	}
-	if d.UUID != "0000:c1:00.0" {
-		t.Errorf("uuid = %q, want 0000:c1:00.0", d.UUID)
+}
+
+// Moore Threads host with all cards passed through: smi empty → fall back to
+// lspci enumeration of mthreads cards. Indices renumbered contiguous 0..N-1.
+func TestCollectGPUCore_MthreadsPassthroughFallback(t *testing.T) {
+	collectors := map[string]func(*model.GPU) bool{"mthreads": smiEmpty}
+	g := collectGPUCore(lspciMthreads3DControllerSample, collectors)
+	if len(g.Devices) != 3 {
+		t.Fatalf("expected 3 mthreads GPUs from lspci fallback, got %d: %+v",
+			len(g.Devices), g.Devices)
 	}
-	if d.Serial != "19e5:abcd" {
-		t.Errorf("serial = %q, want 19e5:abcd", d.Serial)
+	for i, d := range g.Devices {
+		if d.Vendor != "mthreads" {
+			t.Errorf("dev %d vendor = %q, want mthreads", i, d.Vendor)
+		}
+		if d.Index != i {
+			t.Errorf("dev %d index = %d, want %d (renumbered)", i, d.Index, i)
+		}
+		if d.RuntimeMetrics {
+			t.Errorf("dev %d RuntimeMetrics must be false (lspci fallback)", i)
+		}
+	}
+}
+
+// ---------------------------------- probeGpuVendor
+
+func TestProbeGpuVendor(t *testing.T) {
+	collectors := map[string]func(*model.GPU) bool{
+		"nvidia": smiEmpty, "huawei": smiEmpty, "mthreads": smiEmpty}
+	cases := []struct {
+		name string
+		devs []model.GPUDevice
+		want string
+	}{
+		{"empty", nil, ""},
+		{"unknown only", []model.GPUDevice{{Vendor: "intel"}, {Vendor: "amd"}}, ""},
+		{"nvidia present", []model.GPUDevice{{Vendor: "intel"}, {Vendor: "nvidia"}}, "nvidia"},
+		{"huawei present", []model.GPUDevice{{Vendor: "huawei"}}, "huawei"},
+		{"mthreads present", []model.GPUDevice{{Vendor: "mthreads"}}, "mthreads"},
+	}
+	for _, c := range cases {
+		if got := probeGpuVendor(c.devs, collectors); got != c.want {
+			t.Errorf("%s: probeGpuVendor = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// ---------------------------------- filterDevs
+
+func TestFilterDevsReindexes(t *testing.T) {
+	// lspci assigns indices 0..N-1 across all display devices; filterDevs must
+	// pick only the target vendor AND renumber indices contiguously from 0 so
+	// the store's index-keyed change-diff isn't confused by gaps.
+	devs := []model.GPUDevice{
+		{Index: 0, Vendor: "intel", UUID: "igpu"},
+		{Index: 1, Vendor: "nvidia", UUID: "nv0"},
+		{Index: 2, Vendor: "nvidia", UUID: "nv1"},
+		{Index: 3, Vendor: "amd", UUID: "amd0"},
+	}
+	got := filterDevs(devs, "nvidia")
+	if len(got) != 2 {
+		t.Fatalf("expected 2 nvidia devs, got %d: %+v", len(got), got)
+	}
+	if got[0].Index != 0 || got[0].UUID != "nv0" {
+		t.Errorf("got[0] = %+v, want Index=0 UUID=nv0", got[0])
+	}
+	if got[1].Index != 1 || got[1].UUID != "nv1" {
+		t.Errorf("got[1] = %+v, want Index=1 UUID=nv1", got[1])
+	}
+}
+
+func TestFilterDevsEmpty(t *testing.T) {
+	if got := filterDevs(nil, "nvidia"); len(got) != 0 {
+		t.Fatalf("expected empty, got %+v", got)
 	}
 }

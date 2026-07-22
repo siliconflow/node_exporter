@@ -1,22 +1,8 @@
 package model
 
 type Machine struct {
-	Vendor       string `json:"vendor,omitempty"`
-	Product      string `json:"product,omitempty"`
-	Version      string `json:"version,omitempty"`
-	Serial       string `json:"serial,omitempty"`
-	UUID         string `json:"uuid,omitempty"`
-	Hostname     string `json:"hostname,omitempty"`
-	Kernel       string `json:"kernel,omitempty"`
-	KernelArch   string `json:"kernel_arch,omitempty"`
-	OS           string `json:"os,omitempty"`
-	OSVersion    string `json:"os_version,omitempty"`
-	Type         string `json:"type,omitempty"`
-	K8sNode      bool   `json:"k8s_node,omitempty"`
-	BoardVendor  string `json:"board_vendor,omitempty"`
-	BoardName    string `json:"board_name,omitempty"`
-	BoardVersion string `json:"board_version,omitempty"`
-	BoardSerial  string `json:"board_serial,omitempty"`
+	Type    string `json:"type,omitempty"`
+	K8sNode bool   `json:"k8s_node,omitempty"`
 }
 
 type CPU struct {
@@ -27,11 +13,10 @@ type CPU struct {
 }
 
 type CPUDevice struct {
-	ModelName string  `json:"model_name,omitempty"`
-	VendorID  string  `json:"vendor_id,omitempty"`
-	Cores     int     `json:"cores"`
-	Mhz       float64 `json:"mhz,omitempty"`
-	CacheKB   int     `json:"cache_kb,omitempty"`
+	ModelName string `json:"model_name,omitempty"`
+	VendorID  string `json:"vendor_id,omitempty"`
+	Cores     int    `json:"cores"`
+	CacheKB   int    `json:"cache_kb,omitempty"`
 }
 
 type MemoryModule struct {
@@ -46,8 +31,7 @@ type MemoryModule struct {
 }
 
 type Memory struct {
-	TotalBytes uint64         `json:"total_bytes"`
-	Modules    []MemoryModule `json:"modules,omitempty"`
+	Modules []MemoryModule `json:"modules,omitempty"`
 }
 
 type DiskDevice struct {
@@ -91,7 +75,6 @@ type GPU struct {
 
 type NetDevice struct {
 	Name     string   `json:"name,omitempty"`
-	Mac      string   `json:"mac,omitempty"`
 	Physical bool     `json:"physical"`
 	Master   string   `json:"master,omitempty"`
 	Slaves   []string `json:"slaves,omitempty"`

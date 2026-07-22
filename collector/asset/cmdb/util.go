@@ -29,15 +29,6 @@ func commandExists(name string) bool {
 	return err == nil
 }
 
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 func readSysFile(path string) string {
 	b, err := os.ReadFile(path)
 	if err != nil {

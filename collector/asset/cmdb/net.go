@@ -70,7 +70,6 @@ func CollectNet() (*model.Net, error) {
 
 		dev := model.NetDevice{
 			Name:     iface.Name,
-			Mac:      strings.ToLower(strings.TrimSpace(iface.HardwareAddr)),
 			Physical: physical,
 		}
 

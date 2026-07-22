@@ -39,12 +39,9 @@ func NewAssetMachineCollector(logger *slog.Logger) (Collector, error) {
 	return &assetMachineCollector{
 		info: prometheus.NewDesc(
 			prometheus.BuildFQName(assetNamespace, "", "machine_info"),
-			"A metric with a constant '1' value labeled by machine hardware identity "+
-				"(vendor, product, serial, SMBIOS product UUID, board, kernel, OS, type, k8s_node).",
+			"A metric with a constant '1' value labeled by machine type and k8s_node.",
 			[]string{
-				assetUUIDLabel, "vendor", "product", "version", "serial", "machine_uuid",
-				"hostname", "kernel", "kernel_arch", "os", "os_version", "type", "k8s_node",
-				"board_vendor", "board_name", "board_version", "board_serial",
+				assetUUIDLabel, "type", "k8s_node",
 			},
 			nil,
 		),
@@ -65,22 +62,8 @@ func (c *assetMachineCollector) Update(ch chan<- prometheus.Metric) error {
 	}
 	ch <- prometheus.MustNewConstMetric(c.info, prometheus.GaugeValue, 1,
 		uuid,
-		assetLabel(m.Vendor),
-		assetLabel(m.Product),
-		assetLabel(m.Version),
-		assetLabel(m.Serial),
-		assetLabel(m.UUID),
-		assetLabel(m.Hostname),
-		assetLabel(m.Kernel),
-		assetLabel(m.KernelArch),
-		assetLabel(m.OS),
-		assetLabel(m.OSVersion),
 		assetLabel(m.Type),
 		assetBool(m.K8sNode),
-		assetLabel(m.BoardVendor),
-		assetLabel(m.BoardName),
-		assetLabel(m.BoardVersion),
-		assetLabel(m.BoardSerial),
 	)
 	return nil
 }

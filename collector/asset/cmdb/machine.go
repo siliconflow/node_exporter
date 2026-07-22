@@ -27,45 +27,23 @@ var vmVendors = map[string]string{
 func CollectMachine() (*model.Machine, error) {
 	m := &model.Machine{}
 
+	var vendor, product string
 	if prod, err := ghw.Product(); err == nil && prod != nil {
-		m.Vendor = prod.Vendor
-		m.Product = prod.Name
-		m.Version = prod.Version
-		m.Serial = firstNonEmpty(prod.SerialNumber, readDMIFile("product_serial"))
-		m.UUID = prod.UUID
+		vendor = prod.Vendor
+		product = prod.Name
 	} else {
-		m.Vendor = readDMIFile("sys_vendor")
-		m.Product = readDMIFile("product_name")
-		m.Version = readDMIFile("product_version")
-		m.Serial = readDMIFile("product_serial")
-		m.UUID = readDMIFile("product_uuid")
+		vendor = readDMIFile("sys_vendor")
+		product = readDMIFile("product_name")
 	}
 
 	var virtSystem, virtRole string
 	if info, err := host.Info(); err == nil {
-		m.Hostname = info.Hostname
-		m.OS = firstNonEmpty(info.Platform, info.OS)
-		m.OSVersion = info.PlatformVersion
-		m.Kernel = info.KernelVersion
-		m.KernelArch = info.KernelArch
 		virtSystem = info.VirtualizationSystem
 		virtRole = info.VirtualizationRole
 	}
 
-	m.Type = detectMachineType(m.Vendor, m.Product, virtSystem, virtRole)
+	m.Type = detectMachineType(vendor, product, virtSystem, virtRole)
 	m.K8sNode = detectK8sNode()
-
-	if bb, err := ghw.Baseboard(); err == nil && bb != nil {
-		m.BoardVendor = bb.Vendor
-		m.BoardName = bb.Product
-		m.BoardVersion = bb.Version
-		m.BoardSerial = firstNonEmpty(bb.SerialNumber, readDMIFile("board_serial"))
-	} else {
-		m.BoardVendor = readDMIFile("board_vendor")
-		m.BoardName = readDMIFile("board_name")
-		m.BoardVersion = readDMIFile("board_version")
-		m.BoardSerial = readDMIFile("board_serial")
-	}
 
 	return m, nil
 }

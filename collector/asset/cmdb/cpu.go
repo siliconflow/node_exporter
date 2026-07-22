@@ -76,7 +76,6 @@ func CollectCPU() (*model.CPU, error) {
 			ModelName: s.example.ModelName,
 			VendorID:  s.example.VendorID,
 			Cores:     cores,
-			Mhz:       s.example.Mhz,
 			CacheKB:   int(s.example.CacheSize),
 		})
 	}
@@ -97,7 +96,6 @@ func CollectCPU() (*model.CPU, error) {
 		if len(infos) > 0 {
 			dev.ModelName = infos[0].ModelName
 			dev.VendorID = infos[0].VendorID
-			dev.Mhz = infos[0].Mhz
 			dev.CacheKB = int(infos[0].CacheSize)
 		}
 		c.Devices = append(c.Devices[:0], dev)

@@ -1,6 +1,7 @@
 package cmdb
 
 import (
+	"encoding/json"
 	"regexp"
 	"strconv"
 	"strings"
@@ -8,12 +9,98 @@ import (
 	"github.com/prometheus/node_exporter/collector/asset/cmdb/model"
 )
 
+// gpuVendorCollectors maps a canonical vendor name (as produced by
+// identifyLspciVendor) to the specialized smi-based collector for that
+// vendor. Adding a new GPU vendor to the fleet = add one entry here plus a
+// collectXxx function; CollectGPU / probeGpuVendor need no changes.
+var gpuVendorCollectors = map[string]func(*model.GPU) bool{
+	"nvidia":   collectNVIDIA,
+	"huawei":   collectHuaweiNPU,
+	"mthreads": collectMThreads,
+}
+
+// CollectGPU enumerates the host's GPUs in two stages:
+//  1. Run lspci to detect the GPU vendor from PCI display-class (0x03) and
+//     processing-accelerator-class (0x12) devices.
+//  2. Dispatch the vendor's specialized smi tool (nvidia-smi / npu-smi) to
+//     fetch identity + runtime fields. Only if the smi tool reports nothing
+//     (cards passed through to guests, driver broken) does the collector fall
+//     back to the lspci enumeration (PCI identity only, no runtime metrics).
+//
+// Vendors without a registered collector (Intel iGPU, AMD, etc.) are dropped.
+// The fleet is assumed single-vendor per host, so the first recognized vendor
+// drives routing.
 func CollectGPU() (*model.GPU, error) {
+	return collectGPUCore(runLspciOrEmpty(), gpuVendorCollectors), nil
+}
+
+// collectGPUCore is the testable core of CollectGPU (no shell-out). lspciOut is
+// the output of `lspci -Dnn`; collectors maps vendor→smi collector.
+func collectGPUCore(lspciOut string, collectors map[string]func(*model.GPU) bool) *model.GPU {
 	g := &model.GPU{Devices: []model.GPUDevice{}}
-	nvidiaOK := collectNVIDIA(g)
-	huaweiOK := collectHuaweiNPU(g)
-	collectLspciGPU(g, nvidiaOK, huaweiOK)
-	return g, nil
+	lspciDevs := parseLspciGPU(lspciOut)
+	vendor := probeGpuVendor(lspciDevs, collectors)
+	fn, ok := collectors[vendor]
+	if !ok {
+		// Unknown vendor or no GPU/accelerator-class device: nothing to collect.
+		return g
+	}
+	if fn(g) {
+		// smi succeeded with ≥1 card: use its richer output (runtime + identity).
+		return g
+	}
+	// smi empty (passthrough / driver broken): fall back to lspci enumeration
+	// of the detected vendor's cards. PCI identity only, no runtime fields.
+	g.Devices = filterDevs(lspciDevs, vendor)
+	return g
+}
+
+// runLspciOrEmpty runs `lspci -Dnn` and returns its stdout, or "" on any error
+// (lspci not installed, non-zero exit). Returns "" rather than propagating the
+// error so CollectGPU degrades gracefully to an empty GPU set.
+//
+// -D: always print the PCI domain (so bus IDs are unique across hosts).
+// -nn: print both textual names and numeric vendor:device IDs — needed to
+//
+//	identify brand-new SKUs whose PCI ID isn't in pci.ids yet (e.g. the
+//	0x2b85 RTX 5090 shows up as "Device 2b85" without it).
+func runLspciOrEmpty() string {
+	if !commandExists("lspci") {
+		return ""
+	}
+	out, err := runCmd("lspci", "-Dnn")
+	if err != nil {
+		return ""
+	}
+	return out
+}
+
+// probeGpuVendor returns the canonical vendor of the first display-class PCI
+// device that has a registered collector, or "" if none match. Used to route
+// CollectGPU to the right smi tool.
+func probeGpuVendor(devs []model.GPUDevice, collectors map[string]func(*model.GPU) bool) string {
+	for _, d := range devs {
+		if _, ok := collectors[d.Vendor]; ok {
+			return d.Vendor
+		}
+	}
+	return ""
+}
+
+// filterDevs returns the subset of devs belonging to vendor, with Index
+// renumbered to a contiguous 0..N-1 so downstream consumers (the store's
+// change-diff, which keys GPU devices by Index) see a stable sequence.
+func filterDevs(devs []model.GPUDevice, vendor string) []model.GPUDevice {
+	out := make([]model.GPUDevice, 0, len(devs))
+	for _, d := range devs {
+		if d.Vendor == vendor {
+			out = append(out, d)
+		}
+	}
+	for i := range out {
+		out[i].Index = i
+	}
+	return out
 }
 
 func collectNVIDIA(g *model.GPU) bool {
@@ -227,70 +314,134 @@ func parseHuaweiNPU(out string) []model.GPUDevice {
 	return devices
 }
 
-// collectLspciGPU is the catch-all fallback for any display-class PCI device
-// that its vendor's specialized tool didn't capture. Triggers when:
-//   - A card is passed through to a virtual machine (bound to vfio-pci): the
-//     host-side nvidia-smi / npu-smi can't see it, but lspci still scans the
-//     PCIe bus, so the card can at least be enumerated.
-//   - No specialized tool exists for the vendor (Intel iGPU, AMD, Iluvatar,
-//     Biren, Moore Threads, Cambricon, etc.).
-//
-// nvidiaOK / huaweiOK flag whether nvidia-smi / npu-smi already reported at
-// least one card from that vendor on this host. When true the corresponding
-// vendor's lspci entries are skipped to avoid duplicating cards the
-// driver-level tool already covered (a working NVIDIA driver enumerates every
-// NVIDIA GPU bound to it, so one match implies full coverage). Mixed hosts
-// where SOME cards of a vendor are passthrough'd and others aren't are a
-// known trade-off: the vendor tool lists only the non-passthrough'd subset
-// and lspci is then skipped for that vendor for the passthrough'd ones.
-func collectLspciGPU(g *model.GPU, nvidiaOK, huaweiOK bool) {
-	if !commandExists("lspci") {
-		return
+// collectMThreads enumerates Moore Threads GPUs via `mthreads-gmi --query --json`.
+// Returns false (→ lspci fallback) when the tool is absent, fails, or reports no
+// cards (passthrough / driver broken). The JSON output is richer than lspci
+// (driver version, MTBios, memory, utilization, temperature, power), so on
+// success its devices supersede the lspci enumeration.
+func collectMThreads(g *model.GPU) bool {
+	if !commandExists("mthreads-gmi") {
+		return false
 	}
-	// -D: always print the PCI domain (so bus IDs are unique across hosts).
-	// -nn: print both textual names and numeric vendor:device IDs — needed
-	//      to identify brand-new SKUs whose PCI ID isn't in pci.ids yet
-	//      (e.g. the 0x2b85 RTX 5090 shows up as "Device 2b85" without it).
-	out, err := runCmd("lspci", "-Dnn")
+	out, err := runCmd("mthreads-gmi", "--query", "--json")
 	if err != nil {
-		return
+		return false
 	}
-	appendLspciGPU(g, out, nvidiaOK, huaweiOK)
+	devs := parseMThreads(out)
+	if len(devs) == 0 {
+		return false
+	}
+	g.Devices = append(g.Devices, devs...)
+	return true
 }
 
-// appendLspciGPU is the testable core of collectLspciGPU (no shell-out): it
-// appends one GPUDevice per display-class PCI function from the given lspci
-// output, skipping cards of vendors already covered by their specialized tool
-// and continuing the index sequence past whatever g already holds.
-func appendLspciGPU(g *model.GPU, out string, nvidiaOK, huaweiOK bool) {
-	idx := len(g.Devices)
-	for _, d := range parseLspciGPU(out) {
-		switch d.Vendor {
-		case "nvidia":
-			if nvidiaOK {
-				continue
-			}
-		case "huawei":
-			if huaweiOK {
-				continue
-			}
-		}
-		d.Index = idx
-		idx++
-		g.Devices = append(g.Devices, d)
+// mthreadsGMI is the top-level shape of `mthreads-gmi --query --json`.
+type mthreadsGMI struct {
+	DriverVersion string        `json:"Driver Version"`
+	GPUs          []mthreadsGPU `json:"GPU"`
+}
+
+// mthreadsGPU is one entry of the "GPU" array. PowerReadings is decoded into a
+// map rather than a struct because mthreads-gmi emits the power-draw field key
+// with a trailing space ("Power Draw "), which is fragile to match verbatim;
+// mthreadsMapTrimmed resolves the lookup by trimmed-equals comparison.
+type mthreadsGPU struct {
+	Index         string            `json:"Index"`
+	ProductName   string            `json:"Product Name"`
+	GPUUUID       string            `json:"GPU UUID"`
+	SerialNumber  string            `json:"Serial Number"`
+	MTBiosVersion string            `json:"MTBios Version"`
+	FBMemoryUsage mthreadsMem       `json:"FB Memory Usage"`
+	Utilization   mthreadsUtil      `json:"Utilization"`
+	Temperature   mthreadsTemp      `json:"Temperature"`
+	PowerReadings map[string]string `json:"Power Readings"`
+}
+
+type mthreadsMem struct {
+	Total string `json:"Total"`
+	Used  string `json:"Used"`
+	Free  string `json:"Free"`
+}
+
+type mthreadsUtil struct {
+	Gpu    string `json:"Gpu"`
+	Memory string `json:"Memory"`
+}
+
+type mthreadsTemp struct {
+	CurrentTemp string `json:"GPU Current Temp"`
+}
+
+// parseMThreads decodes `mthreads-gmi --query --json` output into GPUDevice
+// records. Every known static + runtime field is populated and RuntimeMetrics
+// is set true (the smi run succeeded), mirroring the NVIDIA/Huawei collectors.
+// On any decode error it returns nil so the caller falls back to lspci.
+func parseMThreads(out string) []model.GPUDevice {
+	var doc mthreadsGMI
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		return nil
 	}
+	devs := make([]model.GPUDevice, 0, len(doc.GPUs))
+	for _, g := range doc.GPUs {
+		powerDraw := mthreadsMapTrimmed(g.PowerReadings, "Power Draw")
+		mem := g.FBMemoryUsage
+		devs = append(devs, model.GPUDevice{
+			Index:           atoiSafe(g.Index),
+			Vendor:          "mthreads",
+			Name:            g.ProductName,
+			UUID:            g.GPUUUID,
+			Serial:          g.SerialNumber,
+			DriverVersion:   doc.DriverVersion,
+			FirmwareVersion: g.MTBiosVersion,
+			MemoryTotalMB:   atouSafe(stripMThreadsUnit(mem.Total, "MiB")),
+			MemoryUsedMB:    atouSafe(stripMThreadsUnit(mem.Used, "MiB")),
+			MemoryFreeMB:    atouSafe(stripMThreadsUnit(mem.Free, "MiB")),
+			Utilization:     atofSafe(stripMThreadsUnit(g.Utilization.Gpu, "%")),
+			Temperature:     atofSafe(stripMThreadsUnit(g.Temperature.CurrentTemp, "C")),
+			PowerW:          atofSafe(stripMThreadsUnit(powerDraw, "W")),
+			Health:          "OK",
+			RuntimeMetrics:  true,
+		})
+	}
+	return devs
+}
+
+// mthreadsMapTrimmed looks up key in m, comparing after trimming whitespace on
+// both sides. Used for mthreads-gmi JSON keys that carry irregular whitespace
+// (e.g. "Power Draw " has a trailing space) so the caller never has to match
+// the exact spacing.
+func mthreadsMapTrimmed(m map[string]string, key string) string {
+	key = strings.TrimSpace(key)
+	for k, v := range m {
+		if strings.TrimSpace(k) == key {
+			return v
+		}
+	}
+	return ""
+}
+
+// stripMThreadsUnit removes a trailing unit suffix (e.g. "MiB", "%", "C", "W")
+// from an mthreads-gmi value string and returns the bare number. Values without
+// the suffix (e.g. "N/A") survive unchanged so atoi/atof safely yield 0.
+func stripMThreadsUnit(s, suffix string) string {
+	s = strings.TrimSpace(s)
+	return strings.TrimSpace(strings.TrimSuffix(s, suffix))
 }
 
 // parseLspciGPU parses `lspci -Dnn` output and returns one GPUDevice per PCI
-// display-class function (VGA / 3D / Display / XGA controller), for ANY
-// vendor — not just NVIDIA. The audio subfunction paired with most consumer
-// GPUs is skipped so each card is counted once via its display function.
+// display-class (VGA / 3D / Display / XGA controller) or processing-accelerator
+// ("Processing accelerators") function, for ANY vendor — not just NVIDIA. The
+// audio subfunction paired with most consumer GPUs is skipped so each card is
+// counted once via its display function. Huawei Ascend NPUs expose the
+// "Processing accelerators" class (0x12) rather than a display class, which is
+// why both classes are matched here.
 //
 // Example input lines:
 //
 //	0000:16:00.0 VGA compatible controller [0300]: NVIDIA Corporation Device 2b85 [10de:2b85] (rev ff)
 //	00:02.0 VGA compatible controller [0300]: Intel Corporation CoffeeLake-S GT2 [UHD Graphics 630] [8086:3e98] (rev 02)
 //	0000:43:00.0 3D controller [0302]: NVIDIA Corporation GA100 [A100 SXM4 40GB] [10de:20b5] (rev a1)
+//	0000:18:00.0 Processing accelerators [1200]: Huawei Technologies Co., Ltd. Device d802 [19e5:d802] (rev 20)
 //
 // Only PCI-level fields are populated: memory/utilization/temperature/power/
 // driver/firmware require a host-bound driver and are left empty. Vendor is
@@ -304,7 +455,7 @@ func parseLspciGPU(out string) []model.GPUDevice {
 		if line == "" {
 			continue
 		}
-		if !isDisplayController(line) {
+		if !isGpuOrAccelerator(line) {
 			continue
 		}
 
@@ -333,26 +484,36 @@ func parseLspciGPU(out string) []model.GPUDevice {
 	return devices
 }
 
-// isDisplayController reports whether an lspci line describes a PCI display
-// controller (base class 0x03). lspci prints these subclass names: "VGA
-// compatible controller" (0x0300), "XGA compatible controller" (0x0301),
-// "3D controller" (0x0302, used by compute-only cards like A100/H100),
+// isGpuOrAccelerator reports whether an lspci line describes a PCI device of
+// interest to GPU collection: display controllers (base class 0x03) or
+// processing accelerators (base class 0x12).
+//
+// Display subclasses (0x03): "VGA compatible controller" (0x0300, used by
+// consumer/RTX cards and the ASPEED BMC VGA), "XGA compatible controller"
+// (0x0301), "3D controller" (0x0302, compute-only cards like A100/H100),
 // "Display controller" (0x0380).
-func isDisplayController(line string) bool {
+//
+// Processing accelerators (0x12): "Processing accelerators" — the class Huawei
+// Ascend NPUs (910B2C et al.) expose; they are NOT display controllers, so
+// without this branch the huawei routing path would silently drop every NPU
+// host.
+func isGpuOrAccelerator(line string) bool {
 	return strings.Contains(line, "VGA compatible controller") ||
 		strings.Contains(line, "XGA compatible controller") ||
 		strings.Contains(line, "3D controller") ||
-		strings.Contains(line, "Display controller")
+		strings.Contains(line, "Display controller") ||
+		strings.Contains(line, "Processing accelerators")
 }
 
 // pciVendorMap maps well-known PCI vendor IDs (lowercase 4-digit hex) to the
 // canonical lowercase vendor name used by the collector. Source:
 // https://pci-ids.ucw.cz/ — extend as new vendors appear in the fleet.
 var pciVendorMap = map[string]string{
-	"10de": "nvidia", // NVIDIA Corporation
-	"1002": "amd",    // Advanced Micro Devices, Inc.
-	"8086": "intel",  // Intel Corporation
-	"19e5": "huawei", // Huawei Technologies Co., Ltd.
+	"10de": "nvidia",   // NVIDIA Corporation
+	"1002": "amd",      // Advanced Micro Devices, Inc.
+	"8086": "intel",    // Intel Corporation
+	"19e5": "huawei",   // Huawei Technologies Co., Ltd.
+	"1ed5": "mthreads", // Moore Threads Technology Co.,Ltd
 }
 
 // identifyLspciVendor resolves the canonical vendor name from the numeric PCI
@@ -377,6 +538,8 @@ func identifyLspciVendor(pciID, name string) string {
 		return "amd"
 	case strings.Contains(lower, "intel"):
 		return "intel"
+	case strings.Contains(lower, "moore threads"):
+		return "mthreads"
 	}
 	if len(pciID) >= 4 {
 		return strings.ToLower(pciID[:4])

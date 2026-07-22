@@ -5,15 +5,10 @@ import (
 	"strings"
 
 	"github.com/prometheus/node_exporter/collector/asset/cmdb/model"
-	"github.com/shirou/gopsutil/v3/mem"
 )
 
 func CollectMemory(machineType string) (*model.Memory, error) {
 	mm := &model.Memory{}
-
-	if vm, err := mem.VirtualMemory(); err == nil {
-		mm.TotalBytes = vm.Total
-	}
 
 	if machineType != "virtual" {
 		mm.Modules = parseDMIDecodeMemory()

@@ -42,9 +42,9 @@ func NewAssetNetCollector(logger *slog.Logger) (Collector, error) {
 	return &assetNetCollector{
 		info: prometheus.NewDesc(
 			prometheus.BuildFQName(assetNamespace, "", "net_info"),
-			"A metric with a constant '1' value labeled by NIC identity (mac, physical, bond master, slaves, vendor, driver).",
+			"A metric with a constant '1' value labeled by NIC identity (physical, bond master, slaves, vendor, driver).",
 			[]string{
-				assetUUIDLabel, "name", "mac", "physical", "master",
+				assetUUIDLabel, "name", "physical", "master",
 				"slaves", "vendor", "driver",
 			},
 			nil,
@@ -69,7 +69,6 @@ func (c *assetNetCollector) Update(ch chan<- prometheus.Metric) error {
 		ch <- prometheus.MustNewConstMetric(c.info, prometheus.GaugeValue, 1,
 			uuid,
 			assetLabel(dev.Name),
-			assetLabel(dev.Mac),
 			assetBool(dev.Physical),
 			assetLabel(dev.Master),
 			strings.Join(dev.Slaves, ","),

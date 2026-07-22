@@ -25,7 +25,6 @@ import (
 
 type assetMemoryCollector struct {
 	moduleInfo *prometheus.Desc
-	totalMB    *prometheus.Desc
 	cache      assetCache[*cmdb.Memory]
 	logger     *slog.Logger
 }
@@ -49,11 +48,6 @@ func NewAssetMemoryCollector(logger *slog.Logger) (Collector, error) {
 			},
 			nil,
 		),
-		totalMB: prometheus.NewDesc(
-			prometheus.BuildFQName(assetNamespace, "", "memory_total_mb"),
-			"Total physical memory in megabytes.",
-			[]string{assetUUIDLabel}, nil,
-		),
 		logger: logger,
 	}, nil
 }
@@ -76,8 +70,6 @@ func (c *assetMemoryCollector) Update(ch chan<- prometheus.Metric) error {
 	if err != nil {
 		return err
 	}
-
-	ch <- prometheus.MustNewConstMetric(c.totalMB, prometheus.GaugeValue, float64(mem.TotalBytes)/1024/1024, uuid)
 
 	for _, mod := range mem.Modules {
 		ch <- prometheus.MustNewConstMetric(c.moduleInfo, prometheus.GaugeValue, 1,
