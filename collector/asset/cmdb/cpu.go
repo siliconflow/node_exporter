@@ -18,7 +18,6 @@ func CollectCPU() (*model.CPU, error) {
 	if logical == 0 {
 		logical = len(infos)
 	}
-	c.Threads = logical
 
 	type socket struct {
 		coreIDs map[string]struct{}
@@ -76,13 +75,14 @@ func CollectCPU() (*model.CPU, error) {
 			ModelName: s.example.ModelName,
 			VendorID:  s.example.VendorID,
 			Cores:     cores,
+			Threads:   s.threads,
 			CacheKB:   int(s.example.CacheSize),
 		})
 	}
 
 	if totalCores > 0 {
-		c.Sockets = len(order)
-		c.Cores = totalCores
+		// Topology recovered from core_id: per-socket devices are already
+		// built above. No machine-level aggregates are stored.
 	} else {
 		// 无法从 cpuinfo 获取 core_id 拓扑(虚拟机/容器常见):
 		// 报告单路,核数取物理核数,缺失时退化为逻辑核数。
@@ -90,9 +90,7 @@ func CollectCPU() (*model.CPU, error) {
 		if cores == 0 {
 			cores = logical
 		}
-		c.Sockets = 1
-		c.Cores = cores
-		dev := model.CPUDevice{Cores: cores}
+		dev := model.CPUDevice{Cores: cores, Threads: logical}
 		if len(infos) > 0 {
 			dev.ModelName = infos[0].ModelName
 			dev.VendorID = infos[0].VendorID

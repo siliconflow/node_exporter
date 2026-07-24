@@ -43,3 +43,4 @@ collector/fixtures/udev/
 FIELDS.md
 node_exporter-asset
 examples/*
+node_exporter_sf

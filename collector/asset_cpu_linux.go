@@ -25,22 +25,22 @@ import (
 )
 
 type assetCPUCollector struct {
-	info        *prometheus.Desc
-	sockets     *prometheus.Desc
-	cores       *prometheus.Desc
-	threads     *prometheus.Desc
-	deviceCores *prometheus.Desc
-	deviceCache *prometheus.Desc
-	cache       assetCache[*cmdb.CPU]
-	logger      *slog.Logger
+	info          *prometheus.Desc
+	deviceCores   *prometheus.Desc
+	deviceThreads *prometheus.Desc
+	deviceCache   *prometheus.Desc
+	cache         assetCache[*cmdb.CPU]
+	logger        *slog.Logger
 }
 
 func init() {
 	registerCollector("asset_cpu", defaultEnabled, NewAssetCPUCollector)
 }
 
-// NewAssetCPUCollector returns a collector exposing CPU topology and per-socket
-// identity under siliconflow_asset_*.
+// NewAssetCPUCollector returns a collector exposing per-socket CPU topology
+// and identity under siliconflow_asset_*. Machine-level aggregate counts
+// (sockets/cores/threads) are no longer emitted; consumers derive them from
+// the per-socket device metrics.
 func NewAssetCPUCollector(logger *slog.Logger) (Collector, error) {
 	return &assetCPUCollector{
 		info: prometheus.NewDesc(
@@ -48,24 +48,14 @@ func NewAssetCPUCollector(logger *slog.Logger) (Collector, error) {
 			"A metric with a constant '1' value labeled by per-socket CPU identity (model name, vendor id).",
 			[]string{assetUUIDLabel, "socket", "model_name", "vendor_id"}, nil,
 		),
-		sockets: prometheus.NewDesc(
-			prometheus.BuildFQName(assetNamespace, "", "cpu_sockets"),
-			"Total number of CPU sockets.",
-			[]string{assetUUIDLabel}, nil,
-		),
-		cores: prometheus.NewDesc(
-			prometheus.BuildFQName(assetNamespace, "", "cpu_cores"),
-			"Total number of physical CPU cores across all sockets.",
-			[]string{assetUUIDLabel}, nil,
-		),
-		threads: prometheus.NewDesc(
-			prometheus.BuildFQName(assetNamespace, "", "cpu_threads"),
-			"Total number of logical CPU threads.",
-			[]string{assetUUIDLabel}, nil,
-		),
 		deviceCores: prometheus.NewDesc(
 			prometheus.BuildFQName(assetNamespace, "", "cpu_device_cores"),
 			"Number of physical cores on a single socket.",
+			[]string{assetUUIDLabel, "socket"}, nil,
+		),
+		deviceThreads: prometheus.NewDesc(
+			prometheus.BuildFQName(assetNamespace, "", "cpu_device_threads"),
+			"Number of logical threads on a single socket.",
 			[]string{assetUUIDLabel, "socket"}, nil,
 		),
 		deviceCache: prometheus.NewDesc(
@@ -89,15 +79,12 @@ func (c *assetCPUCollector) Update(ch chan<- prometheus.Metric) error {
 		return err
 	}
 
-	ch <- prometheus.MustNewConstMetric(c.sockets, prometheus.GaugeValue, float64(cpu.Sockets), uuid)
-	ch <- prometheus.MustNewConstMetric(c.cores, prometheus.GaugeValue, float64(cpu.Cores), uuid)
-	ch <- prometheus.MustNewConstMetric(c.threads, prometheus.GaugeValue, float64(cpu.Threads), uuid)
-
 	for i, dev := range cpu.Devices {
 		socket := strconv.Itoa(i)
 		ch <- prometheus.MustNewConstMetric(c.info, prometheus.GaugeValue, 1,
 			uuid, socket, assetLabel(dev.ModelName), assetLabel(dev.VendorID))
 		ch <- prometheus.MustNewConstMetric(c.deviceCores, prometheus.GaugeValue, float64(dev.Cores), uuid, socket)
+		ch <- prometheus.MustNewConstMetric(c.deviceThreads, prometheus.GaugeValue, float64(dev.Threads), uuid, socket)
 		ch <- prometheus.MustNewConstMetric(c.deviceCache, prometheus.GaugeValue, float64(dev.CacheKB), uuid, socket)
 	}
 	return nil

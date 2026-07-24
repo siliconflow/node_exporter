@@ -59,15 +59,27 @@ siliconflow_asset_machine_info{uuid="<uuid>", type="<physical|virtual>", k8s_nod
 
 > **注意：** 旧指标报告的是 CPU 基频（静态，来自 /proc/cpuinfo），cpufreq 报告的是运行时频率（动态，来自 sysfs）。`node_cpu_frequency_max_hertz` 通常接近基频。
 
+### 移除的 CPU 总量指标
+
+**变更说明：** 移除机器级 CPU 总量指标（`cpu_sockets` / `cpu_cores` / `cpu_threads`），只保留 per-socket 设备级指标。机器级总量改由消费方从 per-socket 指标派生：`sockets = count(cpu_info 按 socket 去重)`、`cores = sum(cpu_device_cores)`、`threads = sum(cpu_device_threads)`。同时新增 `cpu_device_threads` 补齐此前缺失的 per-socket 线程数。
+
+| 旧指标 | 旧标签 | 派生方式 |
+|---|---|---|
+| `siliconflow_asset_cpu_sockets` | `uuid` | `count(cpu_info 按 socket 去重)` |
+| `siliconflow_asset_cpu_cores` | `uuid` | `sum(cpu_device_cores)` |
+| `siliconflow_asset_cpu_threads` | `uuid` | `sum(cpu_device_threads)` |
+
+| 新增指标 | 标签 | 说明 |
+|---|---|---|
+| `siliconflow_asset_cpu_device_threads` | `uuid`, `socket` | 单插槽逻辑线程数 |
+
 ### 保留的 asset_cpu 指标
 
 | 指标 | 标签 | 说明 | 为何保留 |
 |---|---|---|---|
 | `siliconflow_asset_cpu_info` | `uuid`, `socket`, `model_name`, `vendor_id` | CPU 型号标识 | 默认采集器无此信息 |
-| `siliconflow_asset_cpu_sockets` | `uuid` | 插槽总数 | 默认采集器无此信息 |
-| `siliconflow_asset_cpu_cores` | `uuid` | 物理核总数 | 默认采集器无此信息 |
-| `siliconflow_asset_cpu_threads` | `uuid` | 逻辑线程总数 | 默认采集器无此信息 |
 | `siliconflow_asset_cpu_device_cores` | `uuid`, `socket` | 单插槽核数 | 默认采集器无此信息 |
+| `siliconflow_asset_cpu_device_threads` | `uuid`, `socket` | 单插槽逻辑线程数 | 默认采集器无此信息 |
 | `siliconflow_asset_cpu_device_cache_kb` | `uuid`, `socket` | 单插槽缓存大小 | 默认采集器无此信息 |
 
 ---

@@ -5,10 +5,12 @@ type Machine struct {
 	K8sNode bool   `json:"k8s_node,omitempty"`
 }
 
+// CPU carries only per-socket devices. Aggregate counts (sockets/cores/threads)
+// are intentionally NOT stored here: they are derived by consumers from the
+// device list (sockets = len(Devices), cores/threads = SUM over devices). The
+// exporter no longer emits machine-level cpu_sockets/cpu_cores/cpu_threads
+// metrics.
 type CPU struct {
-	Sockets int         `json:"sockets"`
-	Cores   int         `json:"cores"`
-	Threads int         `json:"threads"`
 	Devices []CPUDevice `json:"devices,omitempty"`
 }
 
@@ -16,6 +18,7 @@ type CPUDevice struct {
 	ModelName string `json:"model_name,omitempty"`
 	VendorID  string `json:"vendor_id,omitempty"`
 	Cores     int    `json:"cores"`
+	Threads   int    `json:"threads"`
 	CacheKB   int    `json:"cache_kb,omitempty"`
 }
 
