@@ -45,9 +45,16 @@ siliconflow_asset_machine_info{uuid="<uuid>", type="<physical|virtual>", k8s_nod
 
 ## 2. siliconflow_asset_cpu_device_frequency_mhz
 
-**变更说明：** 移除整个指标，CPU 频率信息由 `cpufreq` 采集器提供。
+**变更说明：** 原计划移除整个指标、CPU 频率信息由 `cpufreq` 采集器提供。**已回退此变更并恢复该指标**：云 VM（阿里云 ECS 等）的 guest 内核不暴露 `/sys/devices/system/cpu/cpuN/cpufreq/`，`cpufreq` 采集器虽启用但零输出，导致 `node_cpu_frequency_*` 全库缺失、CMDB 的 `mhz` 列全为 0。该 asset 指标读 `/proc/cpuinfo` 的 `cpu MHz`（静态基频，VM 上稳定可得），作为 VM 场景的主源重新保留。
 
-### 旧指标 → 替代指标映射
+### 当前策略（优先级）
+
+| 优先级 | 指标 | 来源 | 适用场景 |
+|---|---|---|---|
+| 主源 | `siliconflow_asset_cpu_device_frequency_mhz` | `/proc/cpuinfo` 的 `cpu MHz`（per-socket，asset_cpu 采集器） | VM 及裸金属通用，VM 上为唯一可得来源 |
+| 回退 | `node_cpu_frequency_max_hertz` | sysfs cpufreq（÷1e6） | 裸金属 / 暴露 cpufreq sysfs 的主机，asset 指标缺失时由消费方回退使用 |
+
+### 旧指标 → 替代指标映射（历史记录，供回溯）
 
 | 旧指标 | 旧标签 | 替代指标 | 替代标签 | 采集器 |
 |---|---|---|---|---|
@@ -57,7 +64,7 @@ siliconflow_asset_machine_info{uuid="<uuid>", type="<physical|virtual>", k8s_nod
 | | | `node_cpu_scaling_frequency_max_hertz` | `cpu` | cpufreq |
 | | | `node_cpu_scaling_frequency_hertz` | `cpu` | cpufreq |
 
-> **注意：** 旧指标报告的是 CPU 基频（静态，来自 /proc/cpuinfo），cpufreq 报告的是运行时频率（动态，来自 sysfs）。`node_cpu_frequency_max_hertz` 通常接近基频。
+> **注意：** asset 指标报告的是 CPU 基频（静态，来自 /proc/cpuinfo），cpufreq 报告的是运行时频率（动态，来自 sysfs）。`node_cpu_frequency_max_hertz` 通常接近基频，但在无 cpufreq sysfs 的 VM 上完全缺失，故保留 asset 指标作为主源。
 
 ### 移除的 CPU 总量指标
 
@@ -166,9 +173,9 @@ node_uname_info{release="5.15.0-91-generic"}
 
 # === cpu ===
 
-# 旧：查询 CPU 基频
+# 查询 CPU 基频：asset 指标已恢复为主源（VM 上唯一可得）
 siliconflow_asset_cpu_device_frequency_mhz{socket="0"}
-# 新：查询 CPU 最大频率（通常接近基频）
+# 回退：asset 指标缺失时（裸金属/有 cpufreq sysfs）用 node_cpu_frequency_max_hertz
 node_cpu_frequency_max_hertz{cpu="0"}
 
 # === net ===

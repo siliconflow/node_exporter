@@ -15,11 +15,12 @@ type CPU struct {
 }
 
 type CPUDevice struct {
-	ModelName string `json:"model_name,omitempty"`
-	VendorID  string `json:"vendor_id,omitempty"`
-	Cores     int    `json:"cores"`
-	Threads   int    `json:"threads"`
-	CacheKB   int    `json:"cache_kb,omitempty"`
+	ModelName string  `json:"model_name,omitempty"`
+	VendorID  string  `json:"vendor_id,omitempty"`
+	Cores     int     `json:"cores"`
+	Threads   int     `json:"threads"`
+	Mhz       float64 `json:"mhz,omitempty"`
+	CacheKB   int     `json:"cache_kb,omitempty"`
 }
 
 type MemoryModule struct {

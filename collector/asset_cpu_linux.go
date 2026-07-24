@@ -25,12 +25,13 @@ import (
 )
 
 type assetCPUCollector struct {
-	info          *prometheus.Desc
-	deviceCores   *prometheus.Desc
-	deviceThreads *prometheus.Desc
-	deviceCache   *prometheus.Desc
-	cache         assetCache[*cmdb.CPU]
-	logger        *slog.Logger
+	info             *prometheus.Desc
+	deviceCores      *prometheus.Desc
+	deviceThreads    *prometheus.Desc
+	deviceCache      *prometheus.Desc
+	deviceFrequency  *prometheus.Desc
+	cache            assetCache[*cmdb.CPU]
+	logger           *slog.Logger
 }
 
 func init() {
@@ -63,6 +64,11 @@ func NewAssetCPUCollector(logger *slog.Logger) (Collector, error) {
 			"CPU cache size of a single socket in kilobytes.",
 			[]string{assetUUIDLabel, "socket"}, nil,
 		),
+		deviceFrequency: prometheus.NewDesc(
+			prometheus.BuildFQName(assetNamespace, "", "cpu_device_frequency_mhz"),
+			"CPU base frequency of a single socket in megahertz (from /proc/cpuinfo).",
+			[]string{assetUUIDLabel, "socket"}, nil,
+		),
 		logger: logger,
 	}, nil
 }
@@ -86,6 +92,7 @@ func (c *assetCPUCollector) Update(ch chan<- prometheus.Metric) error {
 		ch <- prometheus.MustNewConstMetric(c.deviceCores, prometheus.GaugeValue, float64(dev.Cores), uuid, socket)
 		ch <- prometheus.MustNewConstMetric(c.deviceThreads, prometheus.GaugeValue, float64(dev.Threads), uuid, socket)
 		ch <- prometheus.MustNewConstMetric(c.deviceCache, prometheus.GaugeValue, float64(dev.CacheKB), uuid, socket)
+		ch <- prometheus.MustNewConstMetric(c.deviceFrequency, prometheus.GaugeValue, dev.Mhz, uuid, socket)
 	}
 	return nil
 }
